@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import time
 from datetime import datetime
-from dhanhq import dhanhq
+from dhanhq import DhanContext, dhanhq  # FIXED: Importing DhanContext
 import plotly.graph_objects as go
 
 # Set Page Config for responsive layout
@@ -13,10 +13,11 @@ st.title("📊 QuantOption Pro - Live Dhan Analytics Engine")
 # --- DHAN DATA ENGINE INTEGRATION ---
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
-        oc_data = dhan_client.option_chain(
-            under_security_id=security_id,
-            under_exchange_segment=exchange_segment,
-            expiry=expiry_date
+        # Utilizing the standardized SDK option chain request footprint
+        oc_data = dhan_client.get_option_chain(
+            underlying_security_id=str(security_id),
+            underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
+            expiry_date=expiry_date
         )
         
         if oc_data.get('status') == 'success' and 'data' in oc_data:
@@ -113,8 +114,9 @@ is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
 placeholder = st.empty()
 
 if st.session_state.running:
-    # FIXED: Initialize by passing only client_id and access_token properly matching the SDK footprint
-    dhan = dhanhq(client_id, access_token)
+    # FIXED: Initialize the client using DhanContext as required by the latest SDK
+    context = DhanContext(client_id, access_token)
+    dhan = dhanhq(context)
     
     while st.session_state.running:
         current_time = datetime.now().strftime("%H:%M:%S")
@@ -179,9 +181,12 @@ if st.session_state.running:
         update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time)
         update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time)
         
-        # Pull VIX (Fallback token check or proxy tracking defaults)
-        vix_response = dhan.market_quote(securities={"NSE_EQ": [26017]})
-        live_vix = vix_response.get('data', {}).get('last_price', 13.50) if vix_response else 13.50
+        # Pull VIX (Using SDK get_ltp framework pattern)
+        try:
+            vix_res = dhan.get_ltp([("NSE_EQ", "26017")])
+            live_vix = vix_res[0].get('ltp', 13.50) if vix_res else 13.50
+        except:
+            live_vix = 13.50
         
         if pcr >= 1.25:
             trade_suggestion, signal_color = "🟢 STRONG BULLISH (GO LONG)", "green"

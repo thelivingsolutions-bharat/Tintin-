@@ -8,21 +8,22 @@ from datetime import datetime
 st.set_page_config(page_title="QuantOption Pro Live", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 QuantOption Pro - Live Chain Analytics Engine")
 
-# --- SIMULATION FEED GENERATOR ---
-def fetch_mock_option_chain(base_spot):
-    strikes = range(int(base_spot - 200), int(base_spot + 250), 50)
+# --- SIMULATION FEED GENERATOR MATCHING STOCK/INDEX REGIMES ---
+def fetch_mock_option_chain(base_spot, is_stock=False):
+    step = 20 if is_stock else 50
+    strikes = range(int(base_spot - (step * 4)), int(base_spot + (step * 5)), step)
     data = []
     for s in strikes:
         data.append({
             'strike': s, 'type': 'CE',
-            'ltp': max(5.0, (base_spot - s) + 40 + np.random.uniform(-2, 2)),
-            'oi': int(1500000 * np.random.uniform(0.7, 1.3)),
+            'ltp': max(2.0, (base_spot - s) + 40 + np.random.uniform(-2, 2)) if not is_stock else max(1.0, (base_spot * 0.02) + np.random.uniform(-0.5, 0.5)),
+            'oi': int(1500000 * np.random.uniform(0.7, 1.3)) if not is_stock else int(80000 * np.random.uniform(0.5, 1.5)),
             'iv': 12.5 + np.random.uniform(-0.5, 1.0)
         })
         data.append({
             'strike': s, 'type': 'PE',
-            'ltp': max(5.0, (s - base_spot) + 35 + np.random.uniform(-2, 2)),
-            'oi': int(1400000 * np.random.uniform(0.7, 1.3)),
+            'ltp': max(2.0, (s - base_spot) + 35 + np.random.uniform(-2, 2)) if not is_stock else max(1.0, (base_spot * 0.02) + np.random.uniform(-0.5, 0.5)),
+            'oi': int(1400000 * np.random.uniform(0.7, 1.3)) if not is_stock else int(75000 * np.random.uniform(0.5, 1.5)),
             'iv': 13.1 + np.random.uniform(-0.5, 1.2)
         })
     return pd.DataFrame(data)
@@ -37,7 +38,13 @@ if "running" not in st.session_state:
 
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("🔧 Configuration Panel")
-target_symbol = st.sidebar.selectbox("Select Underlying Asset", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
+
+# Updated asset array list supporting Index Options and Stock Options
+target_symbol = st.sidebar.selectbox(
+    "Select Underlying Asset", 
+    ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"]
+)
+
 broker_api_key = st.sidebar.text_input("Broker API Key", type="password")
 client_id = st.sidebar.text_input("Client ID")
 
@@ -50,16 +57,24 @@ if col2.button("⏸️ STOP ENGINE", use_container_width=True):
 # --- LIVE REFRESH LOOP CONTAINER ---
 placeholder = st.empty()
 
-# Simulated changing price base
-base_spot = 24300.0
+# Dynamically establishing trading base price registers
+base_price_map = {
+    "NIFTY": 24300.0, "BANKNIFTY": 52400.0, "FINNIFTY": 23200.0, "SENSEX": 80100.0,
+    "RELIANCE": 2450.0, "TCS": 4150.0, "INFY": 1850.0, "HDFCBANK": 1650.0
+}
+base_spot = base_price_map.get(target_symbol, 24300.0)
+is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
 
 if st.session_state.running:
     while st.session_state.running:
         current_time = datetime.now().strftime("%H:%M:%S")
-        base_spot += np.random.uniform(-8, 10)
+        
+        # Simulate real-time ticking
+        drift_scale = 1.5 if is_stock_asset else 9.0
+        base_spot += np.random.uniform(-drift_scale, drift_scale * 1.1)
         
         # Ingest incoming feed
-        df_current = fetch_mock_option_chain(base_spot)
+        df_current = fetch_mock_option_chain(base_spot, is_stock=is_stock_asset)
         st.session_state.snapshot_history[current_time] = df_current
         
         # Identify snapshot keys for comparison (T1 vs T2)
@@ -103,6 +118,17 @@ if st.session_state.running:
         res_min, res_max = (min(top3_ce), max(top3_ce)) if top3_ce else (base_spot, base_spot)
         sup_min, sup_max = (min(top3_pe), max(top3_pe)) if top3_pe else (base_spot, base_spot)
         
+        # --- DIRECTIONAL SIGNAL INTERACTION LOGIC ---
+        if pcr >= 1.25:
+            trade_suggestion = "🟢 STRONG BULLISH (LOOK FOR LONG ENTRIES)"
+            signal_color = "green"
+        elif pcr <= 0.75:
+            trade_suggestion = "🔴 STRONG BEARISH (LOOK FOR SHORT SHORTS)"
+            signal_color = "red"
+        else:
+            trade_suggestion = "🟡 RANGEBOUND / NEUTRAL ZONE (WAIT FOR BREAKOUT)"
+            signal_color = "orange"
+            
         # Log entry for intraday plotting
         new_row = pd.DataFrame([{
             "Timestamp": current_time, "Spot": base_spot, "PCR": pcr,
@@ -112,6 +138,9 @@ if st.session_state.running:
         
         # --- RENDERING THE VISUAL WEB UI ---
         with placeholder.container():
+            # Actionable Strategy Signal Block Row
+            st.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
+            
             # Metrics Dashboard Grid
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
             m_col1.metric("📌 Spot Price", f"{base_spot:.2f}")
@@ -125,14 +154,13 @@ if st.session_state.running:
             st.subheader("📈 Intraday Trend Analytics Chart")
             chart_df = st.session_state.intraday_log.set_index("Timestamp")
             st.line_chart(chart_df[["Spot", "Res_Min", "Res_Max", "Sup_Min", "Sup_Max"]])
-            st.line_chart(chart_df["PCR"]) # Separate panel tracking PCR drift
+            st.line_chart(chart_df["PCR"])
             
             st.markdown("---")
             
             # Option Chain Processing Grid Display Table
             st.subheader("⛓️ Processed Live Option Chain Data Matrix")
             
-            # Highlight custom builder colors based on build type
             def format_buildup(val):
                 color = 'transparent'
                 if val == 'Long Buildup': color = '#1e3d22'
@@ -140,7 +168,6 @@ if st.session_state.running:
                 elif val == 'Short Covering': color = '#1e2d3d'
                 return f'background-color: {color}'
             
-            # FIXED: Using modern .map() instead of deprecated .applymap()
             styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
             st.dataframe(styled_df, use_container_width=True, height=400)
             

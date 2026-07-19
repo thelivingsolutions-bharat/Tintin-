@@ -8,7 +8,7 @@ from datetime import datetime
 st.set_page_config(page_title="QuantOption Pro Live", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 QuantOption Pro - Live Chain Analytics Engine")
 
-# --- SIMULATION FEED GENERATOR MATCHING STOCK/INDEX REGIMES ---
+# --- SIMULATION FEED GENERATOR WITH MULTI-METRIC TRACKERS ---
 def fetch_mock_option_chain(base_spot, is_stock=False):
     step = 20 if is_stock else 50
     strikes = range(int(base_spot - (step * 4)), int(base_spot + (step * 5)), step)
@@ -28,18 +28,19 @@ def fetch_mock_option_chain(base_spot, is_stock=False):
         })
     return pd.DataFrame(data)
 
-# --- SESSION STATE WAREHOUSE (Remembers data across refreshes) ---
+# --- SESSION STATE WAREHOUSE ---
 if "snapshot_history" not in st.session_state:
     st.session_state.snapshot_history = {}
 if "intraday_log" not in st.session_state:
-    st.session_state.intraday_log = pd.DataFrame(columns=["Timestamp", "Spot", "PCR", "Res_Min", "Res_Max", "Sup_Min", "Sup_Max"])
+    st.session_state.intraday_log = pd.DataFrame(columns=[
+        "Timestamp", "Spot", "PCR", "Res_Min", "Res_Max", "Sup_Min", "Sup_Max", "India_VIX", "ATM_Straddle"
+    ])
 if "running" not in st.session_state:
     st.session_state.running = False
 
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("🔧 Configuration Panel")
 
-# Updated asset array list supporting Index Options and Stock Options
 target_symbol = st.sidebar.selectbox(
     "Select Underlying Asset", 
     ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"]
@@ -59,25 +60,30 @@ placeholder = st.empty()
 
 # Dynamically establishing trading base price registers
 base_price_map = {
-    "NIFTY": 24300.0, "BANKNIFTY": 52400.0, "FINNIFTY": 23200.0, "SENSEX": 80100.0,
-    "RELIANCE": 2450.0, "TCS": 4150.0, "INFY": 1850.0, "HDFCBANK": 1650.0
+    "NIFTY": 24334.30, "BANKNIFTY": 58521.40, "FINNIFTY": 26903.35, "SENSEX": 78151.45,
+    "RELIANCE": 1327.20, "TCS": 2269.00, "INFY": 1096.50, "HDFCBANK": 819.60
 }
-base_spot = base_price_map.get(target_symbol, 24300.0)
+base_spot = base_price_map.get(target_symbol, 24334.30)
 is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
+
+# Initialize baseline structural parameters
+if "sim_vix" not in st.session_state:
+    st.session_state.sim_vix = 12.88
 
 if st.session_state.running:
     while st.session_state.running:
         current_time = datetime.now().strftime("%H:%M:%S")
         
-        # Simulate real-time ticking
-        drift_scale = 1.5 if is_stock_asset else 9.0
-        base_spot += np.random.uniform(-drift_scale, drift_scale * 1.1)
+        # Simulate real-time ticking mechanics
+        drift_scale = 1.0 if is_stock_asset else 8.0
+        base_spot += np.random.uniform(-drift_scale, drift_scale * 1.05)
+        st.session_state.sim_vix += np.random.uniform(-0.15, 0.16)
+        st.session_state.sim_vix = max(9.0, min(30.0, st.session_state.sim_vix))
         
-        # Ingest incoming feed
+        # Ingest option chain
         df_current = fetch_mock_option_chain(base_spot, is_stock=is_stock_asset)
         st.session_state.snapshot_history[current_time] = df_current
         
-        # Identify snapshot keys for comparison (T1 vs T2)
         keys = list(st.session_state.snapshot_history.keys())
         t1_time = keys[-5] if len(keys) > 5 else keys[0]
         
@@ -93,10 +99,6 @@ if st.session_state.running:
         comp_df['d_OI'] = df2['oi'] - df1['oi'].reindex(df2.index)
         comp_df.fillna(0, inplace=True)
         
-        # Velocity Spike Checking
-        avg_change = comp_df['d_OI'].abs().mean()
-        comp_df['Velocity_Alert'] = np.where(comp_df['d_OI'].abs() > (2 * avg_change), "🚨 SPIKE", "Normal")
-        
         # Trader Vocabulary Classifier Matrix
         conditions = [
             (comp_df['d_Price'] > 0) & (comp_df['d_OI'] > 0),
@@ -108,7 +110,7 @@ if st.session_state.running:
         comp_df['Buildup_Tag'] = np.select(conditions, labels, default='Neutral')
         comp_df = comp_df.reset_index()
         
-        # Structural Zones Calculations
+        # Structural Calculations
         ce_df = df_current[df_current['type'] == 'CE']
         pe_df = df_current[df_current['type'] == 'PE']
         pcr = pe_df['oi'].sum() / ce_df['oi'].sum() if ce_df['oi'].sum() > 0 else 0
@@ -118,7 +120,14 @@ if st.session_state.running:
         res_min, res_max = (min(top3_ce), max(top3_ce)) if top3_ce else (base_spot, base_spot)
         sup_min, sup_max = (min(top3_pe), max(top3_pe)) if top3_pe else (base_spot, base_spot)
         
-        # --- DIRECTIONAL SIGNAL INTERACTION LOGIC ---
+        # --- ATM STRADDLE PREMIUM ENGINE ---
+        step = 20 if is_stock_asset else 50
+        atm_strike = round(base_spot / step) * step
+        atm_ce = ce_df[ce_df['strike'] == atm_strike]['ltp'].values
+        atm_pe = pe_df[pe_df['strike'] == atm_strike]['ltp'].values
+        straddle_premium = (atm_ce[0] + atm_pe[0]) if (len(atm_ce) > 0 and len(atm_pe) > 0) else 150.0
+        
+        # Directional Signal Interpretation
         if pcr >= 1.25:
             trade_suggestion = "🟢 STRONG BULLISH (LOOK FOR LONG ENTRIES)"
             signal_color = "green"
@@ -129,38 +138,44 @@ if st.session_state.running:
             trade_suggestion = "🟡 RANGEBOUND / NEUTRAL ZONE (WAIT FOR BREAKOUT)"
             signal_color = "orange"
             
-        # Log entry for intraday plotting
+        # Log entry for correlation metrics
         new_row = pd.DataFrame([{
             "Timestamp": current_time, "Spot": base_spot, "PCR": pcr,
-            "Res_Min": res_min, "Res_Max": res_max, "Sup_Min": sup_min, "Sup_Max": sup_max
+            "Res_Min": res_min, "Res_Max": res_max, "Sup_Min": sup_min, "Sup_Max": sup_max,
+            "India_VIX": st.session_state.sim_vix, "ATM_Straddle": straddle_premium
         }])
         st.session_state.intraday_log = pd.concat([st.session_state.intraday_log, new_row], ignore_index=True)
         
         # --- RENDERING THE VISUAL WEB UI ---
         with placeholder.container():
-            # Actionable Strategy Signal Block Row
             st.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
             
             # Metrics Dashboard Grid
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
             m_col1.metric("📌 Spot Price", f"{base_spot:.2f}")
             m_col2.metric("📊 PCR Ratio", f"{pcr:.2f}")
-            m_col3.metric("🟥 Resistance Channel", f"{res_min} - {res_max}")
-            m_col4.metric("🟩 Support Channel", f"{sup_min} - {sup_max}")
+            m_col3.metric("📉 India VIX", f"{st.session_state.sim_vix:.2f}")
+            m_col4.metric("🛡️ ATM Straddle ({})".format(atm_strike), f"₹{straddle_premium:.2f}")
             
             st.markdown("---")
             
-            # Intraday Multi-Axis Trend Plots
-            st.subheader("📈 Intraday Trend Analytics Chart")
-            chart_df = st.session_state.intraday_log.set_index("Timestamp")
-            st.line_chart(chart_df[["Spot", "Res_Min", "Res_Max", "Sup_Min", "Sup_Max"]])
-            st.line_chart(chart_df["PCR"])
+            # MULTI-AXIS CHART PLOTTING (PCR, VIX, STRADDLE)
+            st.subheader("📈 Multi-Color Volatility Correlation Panel")
+            metrics_chart_df = st.session_state.intraday_log.set_index("Timestamp")
+            
+            # Render lines in distinct tracks
+            st.line_chart(metrics_chart_df[["PCR", "India_VIX", "ATM_Straddle"]])
             
             st.markdown("---")
             
-            # Option Chain Processing Grid Display Table
+            # Live Price Trajectory Index Channel Chart
+            st.subheader("📊 Underlying Support/Resistance Price Tracker")
+            st.line_chart(metrics_chart_df[["Spot", "Res_Min", "Sup_Min"]])
+            
+            st.markdown("---")
+            
+            # Option Chain Table Display
             st.subheader("⛓️ Processed Live Option Chain Data Matrix")
-            
             def format_buildup(val):
                 color = 'transparent'
                 if val == 'Long Buildup': color = '#1e3d22'
@@ -169,8 +184,8 @@ if st.session_state.running:
                 return f'background-color: {color}'
             
             styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
-            st.dataframe(styled_df, use_container_width=True, height=400)
+            st.dataframe(styled_df, use_container_width=True, height=350)
             
-        time.sleep(3) # Dynamic loop tracking interval
+        time.sleep(3)
 else:
-    st.info("Engine Idle. Enter your broker metadata panel variables and click 'START ENGINE' to initialize tracking dashboards.")
+    st.info("Engine Idle. Enter your broker configuration metadata panel variables and click 'START ENGINE' to initialize dashboards.")

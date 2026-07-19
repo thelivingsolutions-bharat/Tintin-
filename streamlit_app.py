@@ -143,13 +143,12 @@ if st.session_state.running:
             segment_id = segment_map.get(target_symbol, "IDX_I")
             base_spot, df_current = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
         else:
-            # Simulation mode parameters ticker
             sim_spot += np.random.uniform(-5, 5.2)
             base_spot = sim_spot
             df_current = fetch_mock_option_chain(base_spot, is_stock=is_stock_asset)
             
         if df_current.empty:
-            st.info("Awaiting live data metrics from Dhan API streams... (Check error logs on screen or toggle to Simulation Mode)")
+            st.info("Awaiting live data metrics from Dhan API streams...")
             time.sleep(3)
             continue
             
@@ -236,13 +235,15 @@ if st.session_state.running:
                 if not df_ce_ohlc.empty:
                     fig_ce = go.Figure(data=[go.Candlestick(x=df_ce_ohlc['time'], open=df_ce_ohlc['open'], high=df_ce_ohlc['high'], low=df_ce_ohlc['low'], close=df_ce_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
                     fig_ce.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
-                    st.plotly_chart(fig_ce, use_container_width=True)
+                    # FIXED: Added explicit unique widget keys
+                    st.plotly_chart(fig_ce, use_container_width=True, key="call_candlestick_chart")
             with c_col2:
                 st.markdown("**ATM Put Option (PE) Pricing**")
                 if not df_pe_ohlc.empty:
                     fig_pe = go.Figure(data=[go.Candlestick(x=df_pe_ohlc['time'], open=df_pe_ohlc['open'], high=df_pe_ohlc['high'], low=df_pe_ohlc['low'], close=df_pe_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
                     fig_pe.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
-                    st.plotly_chart(fig_pe, use_container_width=True)
+                    # FIXED: Added explicit unique widget keys
+                    st.plotly_chart(fig_pe, use_container_width=True, key="put_candlestick_chart")
             
             st.markdown("---")
             st.subheader("📈 Volatility Correlation Panel (Line Form)")

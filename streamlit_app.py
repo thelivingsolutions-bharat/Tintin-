@@ -140,7 +140,8 @@ if st.session_state.running:
                 elif val == 'Short Covering': color = '#1e2d3d'
                 return f'background-color: {color}'
             
-            styled_df = comp_df.style.applymap(format_buildup, subset=['Buildup_Tag'])
+            # FIXED: Using modern .map() instead of deprecated .applymap()
+            styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
             st.dataframe(styled_df, use_container_width=True, height=400)
             
         time.sleep(3) # Dynamic loop tracking interval

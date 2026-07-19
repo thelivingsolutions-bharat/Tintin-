@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import time
 from datetime import datetime
-from dhanhq import DhanContext, dhanhq  # FIXED: Importing DhanContext
+from dhanhq import DhanContext, dhanhq  # Importing DhanContext correctly
 import plotly.graph_objects as go
 
 # Set Page Config for responsive layout
@@ -13,11 +13,11 @@ st.title("📊 QuantOption Pro - Live Dhan Analytics Engine")
 # --- DHAN DATA ENGINE INTEGRATION ---
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
-        # Utilizing the standardized SDK option chain request footprint
-        oc_data = dhan_client.get_option_chain(
-            underlying_security_id=str(security_id),
-            underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
-            expiry_date=expiry_date
+        # FIXED: Using the accurate official .option_chain footprint parameter naming conventions
+        oc_data = dhan_client.option_chain(
+            under_security_id=int(security_id),
+            under_exchange_segment=exchange_segment,
+            expiry=expiry_date
         )
         
         if oc_data.get('status') == 'success' and 'data' in oc_data:
@@ -114,7 +114,7 @@ is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
 placeholder = st.empty()
 
 if st.session_state.running:
-    # FIXED: Initialize the client using DhanContext as required by the latest SDK
+    # Initialize credentials context block wrapper 
     context = DhanContext(client_id, access_token)
     dhan = dhanhq(context)
     
@@ -126,7 +126,7 @@ if st.session_state.running:
         base_spot, df_current = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
         
         if df_current.empty:
-            st.info("Awaiting structural data parameters from Dhan API feeds...")
+            st.info("Awaiting live data metrics from Dhan API streams...")
             time.sleep(3)
             continue
             

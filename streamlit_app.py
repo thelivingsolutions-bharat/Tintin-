@@ -4,7 +4,7 @@ import numpy as np
 import time
 from datetime import datetime
 from dhanhq import dhanhq
-import plotly.graph_objects as go  # Added for native mobile candlestick charts
+import plotly.graph_objects as go
 
 # Set Page Config for responsive layout
 st.set_page_config(page_title="QuantOption Pro Live - Dhan Engine", layout="wide", initial_sidebar_state="expanded")
@@ -47,7 +47,6 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
 
 # --- HELPER TO BUILD OHLC CANDLES ---
 def update_ohlc_history(history_list, current_price, current_time):
-    # Check if we need to create a new candle or if this is the first tick
     if not history_list or history_list[-1]['time'] != current_time:
         history_list.append({
             'time': current_time,
@@ -57,12 +56,10 @@ def update_ohlc_history(history_list, current_price, current_time):
             'close': current_price
         })
     else:
-        # Update current active interval candle metrics
         history_list[-1]['high'] = max(history_list[-1]['high'], current_price)
         history_list[-1]['low'] = min(history_list[-1]['low'], current_price)
         history_list[-1]['close'] = current_price
     
-    # Keep historical array memory footprint small
     if len(history_list) > 40:
         history_list.pop(0)
 
@@ -116,6 +113,7 @@ is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
 placeholder = st.empty()
 
 if st.session_state.running:
+    # FIXED: Initialize by passing only client_id and access_token properly matching the SDK footprint
     dhan = dhanhq(client_id, access_token)
     
     while st.session_state.running:
@@ -126,7 +124,7 @@ if st.session_state.running:
         base_spot, df_current = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
         
         if df_current.empty:
-            st.info("Awaiting structural data parameters from Dhan API fields...")
+            st.info("Awaiting structural data parameters from Dhan API feeds...")
             time.sleep(3)
             continue
             
@@ -177,7 +175,7 @@ if st.session_state.running:
         ltp_pe = atm_pe_row['ltp'].values[0] if not atm_pe_row.empty else 0.0
         straddle_premium = ltp_ce + ltp_pe
         
-        # Update dynamic candles queue inside session warehouse
+        # Update dynamic candles queue
         update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time)
         update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time)
         
@@ -243,13 +241,13 @@ if st.session_state.running:
             
             st.markdown("---")
             
-            # --- OTHER STANDARD CHARTS IN LINE FORM ---
-            st.subheader("📈 Multi-Color Volatility Correlation Panel (Line Form)")
+            # --- LINE CHARTS SECTION ---
+            st.subheader("📈 Volatility Correlation Panel (Line Form)")
             metrics_chart_df = st.session_state.intraday_log.set_index("Timestamp")
             st.line_chart(metrics_chart_df[["PCR", "India_VIX", "ATM_Straddle"]])
             
             st.markdown("---")
-            st.subheader("📊 Underlying Support/Resistance Price Tracker (Line Form)")
+            st.subheader("📊 Support/Resistance Price Tracker (Line Form)")
             st.line_chart(metrics_chart_df[["Spot", "Res_Min", "Sup_Min"]])
             
             st.markdown("---")

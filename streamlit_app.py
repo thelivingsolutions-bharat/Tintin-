@@ -55,10 +55,19 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
         st.error(f"Dhan Connection Error: {str(e)}")
     return 0.0, pd.DataFrame()
 
-# --- HELPER TO BUILD OHLC CANDLES ---
-def update_ohlc_history(history_list, current_price, current_time):
-    if not history_list or history_list[-1]['time'] != current_time:
-        history_list.append({'time': current_time, 'open': current_price, 'high': current_price, 'low': current_price, 'close': current_price})
+# --- DYNAMIC INTERACTION OHLC ENGINE ---
+def update_ohlc_history(history_list, current_price, current_time, timeframe_mins):
+    time_object = datetime.strptime(current_time, "%H:%M:%S")
+    
+    # Calculate the rounded down start minute based on selected timeframe
+    minute_val = time_object.minute
+    rounded_minute = (minute_val // timeframe_mins) * timeframe_mins
+    candle_time_str = time_object.replace(minute=rounded_minute, second=0).strftime("%H:%M:00")
+    
+    if not history_list or history_list[-1]['time'] != candle_time_str:
+        history_list.append({
+            'time': candle_time_str, 'open': current_price, 'high': current_price, 'low': current_price, 'close': current_price
+        })
     else:
         history_list[-1]['high'] = max(history_list[-1]['high'], current_price)
         history_list[-1]['low'] = min(history_list[-1]['low'], current_price)
@@ -79,6 +88,8 @@ if "running" not in st.session_state:
     st.session_state.running = False
 if "sim_spot" not in st.session_state:
     st.session_state.sim_spot = 24330.0
+if "current_tf" not in st.session_state:
+    st.session_state.current_tf = "1 Minute"
 
 # --- SIDEBAR CONTROL PANEL ---
 st.sidebar.header("🔌 Mode Selection")
@@ -109,11 +120,26 @@ segment_map = {"NIFTY": "IDX_I", "BANKNIFTY": "IDX_I", "FINNIFTY": "IDX_I", "SEN
 base_price_map = {"NIFTY": 24330.0, "BANKNIFTY": 52400.0, "FINNIFTY": 23200.0, "SENSEX": 80100.0, "RELIANCE": 2450.0, "TCS": 4150.0, "INFY": 1850.0, "HDFCBANK": 1650.0}
 is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
 
-# Create persistent empty placeholder containers outside the loop
+# Permanent UI structural slots
 strategy_box = st.empty()
 metrics_box = st.empty()
 st.markdown("---")
-st.subheader(f"🕯️ ATM Option Chains - Live Candlestick Analytics")
+
+# --- TIMEFRAME CONTROLS CONTAINER ROW ---
+tf_col1, tf_col2 = st.columns([2, 5])
+with tf_col1:
+    selected_tf = st.selectbox("📊 Select Candlestick Timeframe", ["1 Minute", "5 Minute", "15 Minute"], index=0)
+    # Reset candles tracking historical footprint arrays cleanly if user toggles timeframe register
+    if selected_tf != st.session_state.current_tf:
+        st.session_state.atm_ce_ohlc = []
+        st.session_state.atm_pe_ohlc = []
+        st.session_state.current_tf = selected_tf
+
+# Map selected option labels to raw integer counters
+tf_map = {"1 Minute": 1, "5 Minute": 5, "15 Minute": 15}
+tf_minutes = tf_map[st.session_state.current_tf]
+
+st.subheader(f"🕯️ ATM Option Chains - Live Candlestick Analytics ({st.session_state.current_tf})")
 c_col1, c_col2 = st.columns(2)
 ce_chart_slot = c_col1.empty()
 pe_chart_slot = c_col2.empty()
@@ -152,7 +178,6 @@ def live_dashboard_fragment():
     df1 = st.session_state.snapshot_history[t1_time].set_index(['strike', 'type'])
     df2 = df_current.set_index(['strike', 'type'])
     
-    # Calculate Delta Metrics
     comp_df = pd.DataFrame(index=df2.index)
     comp_df['LTP'] = df2['ltp']
     comp_df['OI'] = df2['oi']
@@ -161,7 +186,6 @@ def live_dashboard_fragment():
     comp_df['d_OI'] = df2['oi'] - df1['oi'].reindex(df2.index)
     comp_df.fillna(0, inplace=True)
     
-    # Buildup Identification Matrix
     conditions = [
         (comp_df['d_Price'] > 0) & (comp_df['d_OI'] > 0),
         (comp_df['d_Price'] < 0) & (comp_df['d_OI'] > 0),
@@ -190,8 +214,9 @@ def live_dashboard_fragment():
     ltp_pe = atm_pe_row['ltp'].values[0] if not atm_pe_row.empty else 0.0
     straddle_premium = ltp_ce + ltp_pe
     
-    update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time)
-    update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time)
+    # Process custom OHLC records using the active selector parameters variables
+    update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time, tf_minutes)
+    update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time, tf_minutes)
     
     if engine_mode == "Live Dhan API Mode":
         try:
@@ -209,7 +234,7 @@ def live_dashboard_fragment():
     new_row = pd.DataFrame([{"Timestamp": current_time, "Spot": base_spot, "PCR": pcr, "Res_Min": res_min, "Res_Max": res_max, "Sup_Min": sup_min, "Sup_Max": sup_max, "India_VIX": live_vix, "ATM_Straddle": straddle_premium}])
     st.session_state.intraday_log = pd.concat([st.session_state.intraday_log, new_row], ignore_index=True)
     
-    # --- RENDER WITH SAFE REPLACEMENT LOGIC ---
+    # Render Content Matrices
     strategy_box.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
     
     with metrics_box.container():
@@ -227,14 +252,14 @@ def live_dashboard_fragment():
         if not df_ce_ohlc.empty:
             fig_ce = go.Figure(data=[go.Candlestick(x=df_ce_ohlc['time'], open=df_ce_ohlc['open'], high=df_ce_ohlc['high'], low=df_ce_ohlc['low'], close=df_ce_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
             fig_ce.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
-            st.plotly_chart(fig_ce, use_container_width=True, key="fig_ce_render")
+            st.plotly_chart(fig_ce, use_container_width=True, key="fig_ce_fragment")
             
     with pe_chart_slot.container():
         st.markdown(f"**ATM Put Option (PE) - Strike {atm_strike}**")
         if not df_pe_ohlc.empty:
             fig_pe = go.Figure(data=[go.Candlestick(x=df_pe_ohlc['time'], open=df_pe_ohlc['open'], high=df_pe_ohlc['high'], low=df_pe_ohlc['low'], close=df_pe_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
             fig_pe.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
-            st.plotly_chart(fig_pe, use_container_width=True, key="fig_pe_render")
+            st.plotly_chart(fig_pe, use_container_width=True, key="fig_pe_fragment")
             
     with line_charts_box.container():
         st.subheader("📈 Volatility Correlation Panel (Line Form)")

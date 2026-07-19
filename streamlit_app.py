@@ -109,11 +109,23 @@ segment_map = {"NIFTY": "IDX_I", "BANKNIFTY": "IDX_I", "FINNIFTY": "IDX_I", "SEN
 base_price_map = {"NIFTY": 24330.0, "BANKNIFTY": 52400.0, "FINNIFTY": 23200.0, "SENSEX": 80100.0, "RELIANCE": 2450.0, "TCS": 4150.0, "INFY": 1850.0, "HDFCBANK": 1650.0}
 is_stock_asset = target_symbol in ["RELIANCE", "TCS", "INFY", "HDFCBANK"]
 
-# --- MODERN STREAMLIT AUTOMATED REFRESH FRAGMENT ---
+# Create persistent empty placeholder containers outside the loop
+strategy_box = st.empty()
+metrics_box = st.empty()
+st.markdown("---")
+st.subheader(f"🕯️ ATM Option Chains - Live Candlestick Analytics")
+c_col1, c_col2 = st.columns(2)
+ce_chart_slot = c_col1.empty()
+pe_chart_slot = c_col2.empty()
+st.markdown("---")
+line_charts_box = st.empty()
+option_matrix_box = st.empty()
+
+# --- AUTOMATED REFRESH FRAGMENT ---
 @st.fragment(run_every=3)
 def live_dashboard_fragment():
     if not st.session_state.running:
-        st.info("Dhan Engine Idle. Select mode, enter details in the left panel and tap 'START ENGINE'.")
+        strategy_box.info("Dhan Engine Idle. Select mode, enter details in the left panel and tap 'START ENGINE'.")
         return
 
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -130,7 +142,7 @@ def live_dashboard_fragment():
         df_current = fetch_mock_option_chain(base_spot, is_stock=is_stock_asset)
         
     if df_current.empty:
-        st.warning("Receiving empty data frames. Awaiting market feed connection updates...")
+        strategy_box.warning("Receiving empty data frames. Awaiting market feed connection updates...")
         return
         
     st.session_state.snapshot_history[current_time] = df_current
@@ -197,52 +209,51 @@ def live_dashboard_fragment():
     new_row = pd.DataFrame([{"Timestamp": current_time, "Spot": base_spot, "PCR": pcr, "Res_Min": res_min, "Res_Max": res_max, "Sup_Min": sup_min, "Sup_Max": sup_max, "India_VIX": live_vix, "ATM_Straddle": straddle_premium}])
     st.session_state.intraday_log = pd.concat([st.session_state.intraday_log, new_row], ignore_index=True)
     
-    # --- RENDER DASHBOARD CONTENTS ---
-    st.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
-    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
-    m_col1.metric("📌 Spot Price", f"{base_spot:.2f}")
-    m_col2.metric("📊 PCR Ratio", f"{pcr:.2f}")
-    m_col3.metric("📉 India VIX", f"{live_vix:.2f}")
-    m_col4.metric(f"🛡️ ATM Straddle ({atm_strike})", f"₹{straddle_premium:.2f}")
+    # --- RENDER WITH SAFE REPLACEMENT LOGIC ---
+    strategy_box.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
     
-    st.markdown("---")
-    st.subheader(f"🕯️ ATM Strike {atm_strike} - Live Candlestick Analytics")
-    c_col1, c_col2 = st.columns(2)
+    with metrics_box.container():
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        m_col1.metric("📌 Spot Price", f"{base_spot:.2f}")
+        m_col2.metric("📊 PCR Ratio", f"{pcr:.2f}")
+        m_col3.metric("📉 India VIX", f"{live_vix:.2f}")
+        m_col4.metric(f"🛡️ ATM Straddle ({atm_strike})", f"₹{straddle_premium:.2f}")
+    
     df_ce_ohlc = pd.DataFrame(st.session_state.atm_ce_ohlc)
     df_pe_ohlc = pd.DataFrame(st.session_state.atm_pe_ohlc)
     
-    with c_col1:
-        st.markdown("**ATM Call Option (CE) Pricing**")
+    with ce_chart_slot.container():
+        st.markdown(f"**ATM Call Option (CE) - Strike {atm_strike}**")
         if not df_ce_ohlc.empty:
             fig_ce = go.Figure(data=[go.Candlestick(x=df_ce_ohlc['time'], open=df_ce_ohlc['open'], high=df_ce_ohlc['high'], low=df_ce_ohlc['low'], close=df_ce_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
             fig_ce.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
-            st.plotly_chart(fig_ce, use_container_width=True)
-    with c_col2:
-        st.markdown("**ATM Put Option (PE) Pricing**")
+            st.plotly_chart(fig_ce, use_container_width=True, key="fig_ce_render")
+            
+    with pe_chart_slot.container():
+        st.markdown(f"**ATM Put Option (PE) - Strike {atm_strike}**")
         if not df_pe_ohlc.empty:
             fig_pe = go.Figure(data=[go.Candlestick(x=df_pe_ohlc['time'], open=df_pe_ohlc['open'], high=df_pe_ohlc['high'], low=df_pe_ohlc['low'], close=df_pe_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
             fig_pe.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
-            st.plotly_chart(fig_pe, use_container_width=True)
-    
-    st.markdown("---")
-    st.subheader("📈 Volatility Correlation Panel (Line Form)")
-    metrics_chart_df = st.session_state.intraday_log.set_index("Timestamp")
-    st.line_chart(metrics_chart_df[["PCR", "India_VIX", "ATM_Straddle"]])
-    
-    st.markdown("---")
-    st.subheader("📊 Support/Resistance Price Tracker (Line Form)")
-    st.line_chart(metrics_chart_df[["Spot", "Res_Min", "Sup_Min"]])
-    
-    st.markdown("---")
-    st.subheader("⛓️ Processed Live Option Chain Data Matrix")
-    def format_buildup(val):
-        color = 'transparent'
-        if val == 'Long Buildup': color = '#1e3d22'
-        elif val == 'Short Buildup': color = '#3d1e1e'
-        elif val == 'Short Covering': color = '#1e2d3d'
-        return f'background-color: {color}'
-    styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
-    st.dataframe(styled_df, use_container_width=True, height=300)
+            st.plotly_chart(fig_pe, use_container_width=True, key="fig_pe_render")
+            
+    with line_charts_box.container():
+        st.subheader("📈 Volatility Correlation Panel (Line Form)")
+        metrics_chart_df = st.session_state.intraday_log.set_index("Timestamp")
+        st.line_chart(metrics_chart_df[["PCR", "India_VIX", "ATM_Straddle"]])
+        
+        st.subheader("📊 Support/Resistance Price Tracker (Line Form)")
+        st.line_chart(metrics_chart_df[["Spot", "Res_Min", "Sup_Min"]])
+        
+    with option_matrix_box.container():
+        st.subheader("⛓️ Processed Live Option Chain Data Matrix")
+        def format_buildup(val):
+            color = 'transparent'
+            if val == 'Long Buildup': color = '#1e3d22'
+            elif val == 'Short Buildup': color = '#3d1e1e'
+            elif val == 'Short Covering': color = '#1e2d3d'
+            return f'background-color: {color}'
+        styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
+        st.dataframe(styled_df, use_container_width=True, height=300)
 
-# Execute the self-refreshing container fragment
+# Run fragment loop
 live_dashboard_fragment()

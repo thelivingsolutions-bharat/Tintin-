@@ -50,16 +50,15 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
                 if 'pe' in options:
                     pe = options['pe']
                     chain_records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 15.0)})
-            return base_spot, pd.DataFrame(chain_records)
+            return base_spot, pd.DataFrame(chain_records), "success"
+        else:
+            return 0.0, pd.DataFrame(), oc_data.get('remarks', 'Empty option chain data received')
     except Exception as e:
-        st.error(f"Dhan Connection Error: {str(e)}")
-    return 0.0, pd.DataFrame()
+        return 0.0, pd.DataFrame(), str(e)
 
 # --- DYNAMIC INTERACTION OHLC ENGINE ---
 def update_ohlc_history(history_list, current_price, current_time, timeframe_mins):
     time_object = datetime.strptime(current_time, "%H:%M:%S")
-    
-    # Calculate the rounded down start minute based on selected timeframe
     minute_val = time_object.minute
     rounded_minute = (minute_val // timeframe_mins) * timeframe_mins
     candle_time_str = time_object.replace(minute=rounded_minute, second=0).strftime("%H:%M:00")
@@ -84,8 +83,6 @@ if "atm_ce_ohlc" not in st.session_state:
     st.session_state.atm_ce_ohlc = []
 if "atm_pe_ohlc" not in st.session_state:
     st.session_state.atm_pe_ohlc = []
-if "running" not in st.session_state:
-    st.session_state.running = False
 if "sim_spot" not in st.session_state:
     st.session_state.sim_spot = 24330.0
 if "current_tf" not in st.session_state:
@@ -105,14 +102,21 @@ st.sidebar.header("🎯 Target Selection")
 target_symbol = st.sidebar.selectbox("Select Asset Profile", ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"])
 expiry_date = st.sidebar.text_input("Expiry Date (YYYY-MM-DD)", value="2026-07-23")
 
-col1, col2 = st.sidebar.columns(2)
-if col1.button("▶️ START ENGINE", use_container_width=True):
+st.sidebar.markdown("---")
+st.sidebar.header("🕹️ Engine Activation")
+# FIXED: Replaced transient buttons with a stable state toggle switch
+activate_engine = st.sidebar.toggle("🚀 ACTIVATE ENGINE", value=False)
+
+# Validation logic checks
+credential_error = False
+if activate_engine:
     if engine_mode == "Live Dhan API Mode" and (not client_id or not access_token):
-        st.sidebar.error("Provide valid Dhan credentials first!")
+        credential_error = True
+        running_state = False
     else:
-        st.session_state.running = True
-if col2.button("⏸️ STOP ENGINE", use_container_width=True):
-    st.session_state.running = False
+        running_state = True
+else:
+    running_state = False
 
 # Mappings
 security_id_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "SENSEX": 51, "RELIANCE": 2885, "TCS": 11536, "INFY": 1594, "HDFCBANK": 1333}
@@ -125,17 +129,15 @@ strategy_box = st.empty()
 metrics_box = st.empty()
 st.markdown("---")
 
-# --- TIMEFRAME CONTROLS CONTAINER ROW ---
+# Timeframe Selector
 tf_col1, tf_col2 = st.columns([2, 5])
 with tf_col1:
     selected_tf = st.selectbox("📊 Select Candlestick Timeframe", ["1 Minute", "5 Minute", "15 Minute"], index=0)
-    # Reset candles tracking historical footprint arrays cleanly if user toggles timeframe register
     if selected_tf != st.session_state.current_tf:
         st.session_state.atm_ce_ohlc = []
         st.session_state.atm_pe_ohlc = []
         st.session_state.current_tf = selected_tf
 
-# Map selected option labels to raw integer counters
 tf_map = {"1 Minute": 1, "5 Minute": 5, "15 Minute": 15}
 tf_minutes = tf_map[st.session_state.current_tf]
 
@@ -150,8 +152,12 @@ option_matrix_box = st.empty()
 # --- AUTOMATED REFRESH FRAGMENT ---
 @st.fragment(run_every=3)
 def live_dashboard_fragment():
-    if not st.session_state.running:
-        strategy_box.info("Dhan Engine Idle. Select mode, enter details in the left panel and tap 'START ENGINE'.")
+    if credential_error:
+        strategy_box.error("❌ Input Error: Please make sure you fill in both Client ID and Access Token fields in the sidebar before activating.")
+        return
+
+    if not running_state:
+        strategy_box.info("Dhan Engine Idle. Open the sidebar panel, update parameters, and flip 'ACTIVATE ENGINE' to begin.")
         return
 
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -161,15 +167,15 @@ def live_dashboard_fragment():
         dhan = dhanhq(context)
         scrip_id = security_id_map.get(target_symbol, 13)
         segment_id = segment_map.get(target_symbol, "IDX_I")
-        base_spot, df_current = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
+        base_spot, df_current, api_status = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
+        
+        if api_status != "success":
+            strategy_box.error(f"❌ Dhan Connection Refused: {api_status}. (Ensure your Access Token isn't expired or copied incorrectly).")
+            return
     else:
         st.session_state.sim_spot += np.random.uniform(-5, 5.2)
         base_spot = st.session_state.sim_spot
         df_current = fetch_mock_option_chain(base_spot, is_stock=is_stock_asset)
-        
-    if df_current.empty:
-        strategy_box.warning("Receiving empty data frames. Awaiting market feed connection updates...")
-        return
         
     st.session_state.snapshot_history[current_time] = df_current
     keys = list(st.session_state.snapshot_history.keys())
@@ -214,7 +220,6 @@ def live_dashboard_fragment():
     ltp_pe = atm_pe_row['ltp'].values[0] if not atm_pe_row.empty else 0.0
     straddle_premium = ltp_ce + ltp_pe
     
-    # Process custom OHLC records using the active selector parameters variables
     update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time, tf_minutes)
     update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time, tf_minutes)
     
@@ -234,7 +239,7 @@ def live_dashboard_fragment():
     new_row = pd.DataFrame([{"Timestamp": current_time, "Spot": base_spot, "PCR": pcr, "Res_Min": res_min, "Res_Max": res_max, "Sup_Min": sup_min, "Sup_Max": sup_max, "India_VIX": live_vix, "ATM_Straddle": straddle_premium}])
     st.session_state.intraday_log = pd.concat([st.session_state.intraday_log, new_row], ignore_index=True)
     
-    # Render Content Matrices
+    # Render Layout
     strategy_box.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
     
     with metrics_box.container():

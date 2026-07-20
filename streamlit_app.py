@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="QuantOption Pro Live - Dhan Engine", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 QuantOption Pro - Live Dhan Analytics Engine")
 
-# --- SIMULATION FEED GENERATOR (FALLBACK FOR WEEKENDS) ---
+# --- SIMULATION FEED GENERATOR (FALLBACK ENGINE) ---
 def fetch_mock_option_chain(base_spot, is_stock=False):
     step = 20 if is_stock else 50
     strikes = range(int(base_spot - (step * 4)), int(base_spot + (step * 5)), step)
@@ -34,27 +34,27 @@ def fetch_mock_option_chain(base_spot, is_stock=False):
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
         oc_data = None
-        
-        # DYNAMIC ROUTING FIX: Checks which function signature exists on the current SDK build
-        if hasattr(dhan_client, 'get_option_chain'):
-            oc_data = dhan_client.get_option_chain(
-                underlying_security_id=str(security_id),
-                underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
-                expiry_date=expiry_date
-            )
-        elif hasattr(dhan_client, 'option_chain'):
+        if hasattr(dhan_client, 'option_chain'):
             oc_data = dhan_client.option_chain(
                 under_security_id=int(security_id),
                 under_exchange_segment=exchange_segment,
                 expiry=expiry_date
             )
-        else:
-            return 0.0, pd.DataFrame(), "SDK Method Signature not identified on this client"
+        elif hasattr(dhan_client, 'get_option_chain'):
+            oc_data = dhan_client.get_option_chain(
+                underlying_security_id=str(security_id),
+                underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
+                expiry_date=expiry_date
+            )
 
         if oc_data and oc_data.get('status') == 'success' and 'data' in oc_data:
+            data_payload = oc_data['data']
+            if not data_payload or not data_payload.get('oc'):
+                return 0.0, pd.DataFrame(), "EMPTY_DATA"
+                
             chain_records = []
-            base_spot = oc_data['data'].get('last_price', 0.0)
-            option_chain_map = oc_data['data'].get('oc', {})
+            base_spot = data_payload.get('last_price', 0.0)
+            option_chain_map = data_payload.get('oc', {})
             
             for strike_str, options in option_chain_map.items():
                 strike_val = float(strike_str)
@@ -66,7 +66,7 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
                     chain_records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 15.0)})
             return base_spot, pd.DataFrame(chain_records), "success"
         else:
-            remarks = oc_data.get('remarks', 'Empty payload or API rate-limit threshold hit.') if oc_data else "No response"
+            remarks = oc_data.get('remarks', 'Empty server dictionary payload returned.') if oc_data else "Null Gateway Response"
             return 0.0, pd.DataFrame(), str(remarks)
             
     except Exception as e:
@@ -175,6 +175,7 @@ def live_dashboard_fragment():
         return
 
     current_time = datetime.now().strftime("%H:%M:%S")
+    use_sim = (engine_mode != "Live Dhan API Mode")
     
     if engine_mode == "Live Dhan API Mode":
         context = DhanContext(client_id, access_token)
@@ -183,10 +184,15 @@ def live_dashboard_fragment():
         segment_id = segment_map.get(target_symbol, "IDX_I")
         base_spot, df_current, api_status = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
         
-        if api_status != "success":
+        # FIXED: Dynamic Fallback Switch
+        if api_status == "EMPTY_DATA":
+            strategy_box.warning("⚠️ Dhan API connected but returned no contracts. Activating Auto-Simulation Fallback to maintain visual engine tracking...")
+            use_sim = True
+        elif api_status != "success":
             strategy_box.error(f"❌ Dhan Connection Refused: {api_status}")
             return
-    else:
+            
+    if use_sim:
         st.session_state.sim_spot += np.random.uniform(-5, 5.2)
         base_spot = st.session_state.sim_spot
         df_current = fetch_mock_option_chain(base_spot, is_stock=is_stock_asset)
@@ -237,7 +243,7 @@ def live_dashboard_fragment():
     update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time, tf_minutes)
     update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time, tf_minutes)
     
-    if engine_mode == "Live Dhan API Mode":
+    if engine_mode == "Live Dhan API Mode" and not use_sim:
         try:
             vix_res = dhan.get_ltp([("NSE_EQ", "26017")])
             live_vix = vix_res[0].get('ltp', 13.50) if vix_res else 13.50
@@ -254,7 +260,8 @@ def live_dashboard_fragment():
     st.session_state.intraday_log = pd.concat([st.session_state.intraday_log, new_row], ignore_index=True)
     
     # Render Layout
-    strategy_box.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
+    if not use_sim:
+        strategy_box.markdown(f"### Strategy Action: :{signal_color}[{trade_suggestion}]")
     
     with metrics_box.container():
         m_col1, m_col2, m_col3, m_col4 = st.columns(4)

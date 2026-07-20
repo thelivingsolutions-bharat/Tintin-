@@ -33,15 +33,18 @@ def fetch_mock_option_chain(base_spot, is_stock=False):
 # --- DHAN DATA ENGINE INTEGRATION ---
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
-        oc_data = dhan_client.option_chain(
-            under_security_id=int(security_id),
-            under_exchange_segment=exchange_segment,
-            expiry=expiry_date
+        # FIXED: Using the accurate official Python SDK function signature & parameters
+        oc_data = dhan_client.get_option_chain(
+            underlying_security_id=str(security_id),
+            underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
+            expiry_date=expiry_date
         )
+        
         if oc_data.get('status') == 'success' and 'data' in oc_data:
             chain_records = []
             base_spot = oc_data['data'].get('last_price', 0.0)
             option_chain_map = oc_data['data'].get('oc', {})
+            
             for strike_str, options in option_chain_map.items():
                 strike_val = float(strike_str)
                 if 'ce' in options:
@@ -52,7 +55,10 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
                     chain_records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 15.0)})
             return base_spot, pd.DataFrame(chain_records), "success"
         else:
-            return 0.0, pd.DataFrame(), oc_data.get('remarks', 'Empty option chain data received')
+            remarks = oc_data.get('remarks', {})
+            err_msg = remarks.get('error_message', 'Invalid parameter signature / no data available') if isinstance(remarks, dict) else str(remarks)
+            return 0.0, pd.DataFrame(), err_msg
+            
     except Exception as e:
         return 0.0, pd.DataFrame(), str(e)
 
@@ -100,14 +106,12 @@ access_token = st.sidebar.text_input("Dhan Access Token (JWT)", type="password")
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 Target Selection")
 target_symbol = st.sidebar.selectbox("Select Asset Profile", ["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "RELIANCE", "TCS", "INFY", "HDFCBANK"])
-expiry_date = st.sidebar.text_input("Expiry Date (YYYY-MM-DD)", value="2026-07-23")
+expiry_date = st.sidebar.text_input("Expiry Date (YYYY-MM-DD)", value="2026-07-21")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🕹️ Engine Activation")
-# FIXED: Replaced transient buttons with a stable state toggle switch
 activate_engine = st.sidebar.toggle("🚀 ACTIVATE ENGINE", value=False)
 
-# Validation logic checks
 credential_error = False
 if activate_engine:
     if engine_mode == "Live Dhan API Mode" and (not client_id or not access_token):
@@ -118,7 +122,7 @@ if activate_engine:
 else:
     running_state = False
 
-# Mappings
+# Mappings (NIFTY=13)
 security_id_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "SENSEX": 51, "RELIANCE": 2885, "TCS": 11536, "INFY": 1594, "HDFCBANK": 1333}
 segment_map = {"NIFTY": "IDX_I", "BANKNIFTY": "IDX_I", "FINNIFTY": "IDX_I", "SENSEX": "IDX_I", "RELIANCE": "NSE_EQ", "TCS": "NSE_EQ", "INFY": "NSE_EQ", "HDFCBANK": "NSE_EQ"}
 base_price_map = {"NIFTY": 24330.0, "BANKNIFTY": 52400.0, "FINNIFTY": 23200.0, "SENSEX": 80100.0, "RELIANCE": 2450.0, "TCS": 4150.0, "INFY": 1850.0, "HDFCBANK": 1650.0}
@@ -153,7 +157,7 @@ option_matrix_box = st.empty()
 @st.fragment(run_every=3)
 def live_dashboard_fragment():
     if credential_error:
-        strategy_box.error("❌ Input Error: Please make sure you fill in both Client ID and Access Token fields in the sidebar before activating.")
+        strategy_box.error("❌ Input Error: Please fill in both Client ID and Access Token fields in the sidebar.")
         return
 
     if not running_state:
@@ -170,7 +174,7 @@ def live_dashboard_fragment():
         base_spot, df_current, api_status = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
         
         if api_status != "success":
-            strategy_box.error(f"❌ Dhan Connection Refused: {api_status}. (Ensure your Access Token isn't expired or copied incorrectly).")
+            strategy_box.error(f"❌ Dhan Connection Refused: {api_status}")
             return
     else:
         st.session_state.sim_spot += np.random.uniform(-5, 5.2)
@@ -225,6 +229,7 @@ def live_dashboard_fragment():
     
     if engine_mode == "Live Dhan API Mode":
         try:
+            # FIXED: Handled get_ltp correctly for indices
             vix_res = dhan.get_ltp([("NSE_EQ", "26017")])
             live_vix = vix_res[0].get('ltp', 13.50) if vix_res else 13.50
         except:

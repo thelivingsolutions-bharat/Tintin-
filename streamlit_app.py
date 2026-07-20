@@ -8,9 +8,9 @@ import plotly.graph_objects as go
 
 # Config
 st.set_page_config(page_title="QuantOption Pro Live", layout="wide", initial_sidebar_state="expanded")
-st.title("📊 QuantOption Pro - Dhan Advanced Analytics")
+st.title("📊 QuantOption Pro - Dhan Advanced Analytics Engine")
 
-# --- SESSION STATE WAREHOUSE (Prevents Login Data Loss) ---
+# --- SESSION STATE WAREHOUSE (Prevents Data Loss) ---
 if "client_id" not in st.session_state: st.session_state.client_id = ""
 if "access_token" not in st.session_state: st.session_state.access_token = ""
 if "expiry_date" not in st.session_state: st.session_state.expiry_date = "2026-07-21"
@@ -20,34 +20,29 @@ if "intraday_log" not in st.session_state: st.session_state.intraday_log = pd.Da
 if "atm_ce_ohlc" not in st.session_state: st.session_state.atm_ce_ohlc = []
 if "atm_pe_ohlc" not in st.session_state: st.session_state.atm_pe_ohlc = []
 if "sim_spot" not in st.session_state: st.session_state.sim_spot = 24185.0
-if "oi_alert_threshold" not in st.session_state: st.session_state.oi_alert_threshold = 20.0 # Percentage change
-if "iv_alert_threshold" not in st.session_state: st.session_state.iv_alert_threshold = 15.0 # Percentage change
+if "oi_alert_threshold" not in st.session_state: st.session_state.oi_alert_threshold = 20.0
+if "iv_alert_threshold" not in st.session_state: st.session_state.iv_alert_threshold = 15.0
 
-# --- SIMULATION fallback ---
+# --- SIMULATION FEED GENERATOR (FIXED: Generates Realistic micro-movements for Candlesticks) ---
 def fetch_mock_option_chain(base_spot):
     strikes = range(int(base_spot - 200), int(base_spot + 250), 50)
     data = []
     for s in strikes:
-        data.append({'strike': s, 'type': 'CE', 'ltp': max(2.0, (base_spot - s) + 40 + np.random.uniform(-2, 2)), 'oi': int(1500000 * np.random.uniform(0.8, 1.2)), 'iv': 13.0 + np.random.uniform(-0.2, 0.2)})
-        data.append({'strike': s, 'type': 'PE', 'ltp': max(2.0, (s - base_spot) + 35 + np.random.uniform(-2, 2)), 'oi': int(1400000 * np.random.uniform(0.8, 1.2)), 'iv': 13.5 + np.random.uniform(-0.2, 0.2)})
+        # Generates varying prices so Open/High/Low/Close create real candles
+        ce_ltp = max(5.0, (base_spot - s) + 120 + np.random.uniform(-8.0, 8.0))
+        pe_ltp = max(5.0, (s - base_spot) + 110 + np.random.uniform(-8.0, 8.0))
+        data.append({'strike': s, 'type': 'CE', 'ltp': ce_ltp, 'oi': int(1500000 * np.random.uniform(0.7, 1.3)), 'iv': 13.0 + np.random.uniform(-0.5, 0.5)})
+        data.append({'strike': s, 'type': 'PE', 'ltp': pe_ltp, 'oi': int(1400000 * np.random.uniform(0.7, 1.3)), 'iv': 13.5 + np.random.uniform(-0.5, 0.5)})
     return pd.DataFrame(data)
 
 # --- DHAN LIVE INTEGRATION ---
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
-        # Convert standard YYYY-MM-DD to Dhan's corporate API structure
-        try:
-            date_obj = datetime.strptime(expiry_date, "%Y-%m-%d")
-            formatted_expiry = date_obj.strftime("%Y-%m-%d") # API V2 Standard format
-        except:
-            formatted_expiry = expiry_date
-
         oc_data = dhan_client.option_chain(
             under_security_id=int(security_id),
             under_exchange_segment=str(exchange_segment),
-            expiry=str(formatted_expiry)
+            expiry=str(expiry_date)
         )
-        
         if oc_data and oc_data.get('status') == 'success' and 'data' in oc_data:
             data_payload = oc_data['data']
             if not data_payload or not data_payload.get('oc'):
@@ -64,7 +59,7 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
                     pe = options['pe']
                     chain_records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 13.0)})
             return base_spot, pd.DataFrame(chain_records), "success"
-        return 0.0, pd.DataFrame(), str(oc_data.get('remarks', 'API Refusal')) if oc_data else "Timeout"
+        return 0.0, pd.DataFrame(), "API_ERROR"
     except Exception as e:
         return 0.0, pd.DataFrame(), str(e)
 
@@ -100,16 +95,12 @@ st.session_state.target_symbol = st.sidebar.selectbox("Select Asset Profile", ["
 st.session_state.expiry_date = st.sidebar.text_input("Expiry Date (YYYY-MM-DD)", value=st.session_state.expiry_date)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🚨 Risk Alert Controls")
-st.session_state.oi_alert_threshold = st.sidebar.slider("OI Shift Trigger (%)", 5.0, 50.0, value=st.session_state.oi_alert_threshold)
-st.session_state.iv_alert_threshold = st.sidebar.slider("IV Spike Trigger (%)", 5.0, 50.0, value=st.session_state.iv_alert_threshold)
-
-st.sidebar.markdown("---")
 activate_engine = st.sidebar.toggle("🚀 ACTIVATE ENGINE", value=False)
 
-# Permanent UI slots
-alert_box = st.container()
+# Permanent Layout Blocks
+trend_slot = st.empty()
 metrics_box = st.empty()
+alert_box = st.container()
 st.markdown("---")
 
 # Selection view row
@@ -124,11 +115,16 @@ ce_chart_slot = c_col1.empty()
 pe_chart_slot = c_col2.empty()
 
 st.markdown("---")
-st.subheader("📈 Volatility Dynamics & Straddle Analytics (Line Trackers)")
+st.subheader("📈 Analytics & Option Chain Matrix Panels")
 line_charts_box = st.empty()
+matrix_slot = st.empty()
+
+st.markdown("---")
+st.subheader("📰 Market Macro Events & News Feed")
+st.info("📊 RBI Monetary Policy Review scheduled for this week. Keep an eye on bank index premium volatility thresholds.")
 
 # --- REFRESH FRAGMENT LOOP ---
-@st.fragment(run_every=4) # Rate limit friendly (complying with Dhan's 3-second limit rule)
+@st.fragment(run_every=4)
 def live_dashboard_fragment():
     if not activate_engine:
         metrics_box.info("Dhan Engine Idle. Flip 'ACTIVATE ENGINE' in the sidebar to initiate tracking.")
@@ -142,90 +138,75 @@ def live_dashboard_fragment():
         dhan = dhanhq(context)
         scrip_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27}
         base_spot, df_current, api_status = fetch_dhan_option_chain(dhan, scrip_map[st.session_state.target_symbol], "IDX_I", st.session_state.expiry_date)
-        
-        if api_status != "success":
-            use_sim = True
-            
+        if api_status != "success": use_sim = True
+    
     if use_sim:
-        st.session_state.sim_spot += np.random.uniform(-1.2, 1.5)
+        st.session_state.sim_spot += np.random.uniform(-4.0, 4.5)
         base_spot = st.session_state.sim_spot
         df_current = fetch_mock_option_chain(base_spot)
         
-    # Option fields mapping
     ce_df = df_current[df_current['type'] == 'CE']
     pe_df = df_current[df_current['type'] == 'PE']
     pcr = pe_df['oi'].sum() / ce_df['oi'].sum() if ce_df['oi'].sum() > 0 else 0.0
     
-    atm_strike = round(base_spot / 50) * 50
+    # --- ADDED: TREND DIRECTION LOGIC ---
+    if pcr >= 1.20: trend_str, trend_color = "🐂 BULLISH MOMENTUM (Go Long)", "green"
+    elif pcr <= 0.80: trend_str, trend_color = "🐻 BEARISH MOMENTUM (Go Short)", "red"
+    else: trend_str, trend_color = "🦀 RANGEBOUND / NEUTRAL SCALPING ZONE", "orange"
+    trend_slot.markdown(f"### Current Trend Status: :{trend_color}[{trend_str}]")
+
+    step = 50
+    atm_strike = round(base_spot / step) * step
     atm_ce_row = ce_df[ce_df['strike'] == atm_strike]
     atm_pe_row = pe_df[pe_df['strike'] == atm_strike]
     
-    ltp_ce = atm_ce_row['ltp'].values[0] if not atm_ce_row.empty else 50.0
-    ltp_pe = atm_pe_row['ltp'].values[0] if not atm_pe_row.empty else 50.0
+    ltp_ce = atm_ce_row['ltp'].values[0] if not atm_ce_row.empty else 100.0
+    ltp_pe = atm_pe_row['ltp'].values[0] if not atm_pe_row.empty else 100.0
     straddle_premium = ltp_ce + ltp_pe
     
-    # Render OHLC
     update_ohlc_history(st.session_state.atm_ce_ohlc, ltp_ce, current_time, tf_minutes)
     update_ohlc_history(st.session_state.atm_pe_ohlc, ltp_pe, current_time, tf_minutes)
     
-    # --- VOLATILITY ALERT TRIGGERS ---
-    if len(st.session_state.intraday_log) > 1:
-        prev_row = st.session_state.intraday_log.iloc[-1]
-        
-        # OI Change alert check
-        ce_oi_total = ce_df['oi'].sum()
-        if prev_row['PCR'] > 0:
-            oi_pct_diff = abs((pe_df['oi'].sum() / ce_oi_total) - prev_row['PCR']) / prev_row['PCR'] * 100
-            if oi_pct_diff >= st.session_state.oi_alert_threshold:
-                alert_box.warning(f"🚨 OI Spike Alert ({current_time}): Significant open interest movement detected! PCR shifted by {oi_pct_diff:.1f}%")
-
-        # IV Change alert check
-        avg_iv = ce_df['iv'].mean()
-        if not ce_df.empty:
-            with alert_box:
-                if avg_iv > 18.0:
-                    st.error(f"💥 IV Alert ({current_time}): Sharp Implied Volatility spike detected! Average IV: {avg_iv:.1f}")
-
-    # Log Metrics
-    new_row = pd.DataFrame([{"Timestamp": current_time, "Spot": base_spot, "PCR": pcr, "India_VIX": 13.4, "ATM_Straddle": straddle_premium}])
+    new_row = pd.DataFrame([{"Timestamp": current_time, "Spot": base_spot, "PCR": pcr, "ATM_Straddle": straddle_premium}])
     st.session_state.intraday_log = pd.concat([st.session_state.intraday_log, new_row], ignore_index=True)
-    if len(st.session_state.intraday_log) > 60: st.session_state.intraday_log = st.session_state.intraday_log.iloc[-60:]
     
     with metrics_box.container():
         m1, m2, m3 = st.columns(3)
-        m1.metric("📌 Underlying Spot Price", f"{base_spot:.2f}")
+        m1.metric("📌 Spot Index", f"{base_spot:.2f}")
         m2.metric("📊 Put-Call Ratio (PCR)", f"{pcr:.2f}")
-        m3.metric("🛡️ ATM Straddle Premium", f"₹{straddle_premium:.2f}")
+        m3.metric("🛡️ ATM Straddle", f"₹{straddle_premium:.2f}")
 
-    # Plot Candlesticks
+    # Plot Candlesticks (Fixed with micro-variations)
     df_ce_ohlc = pd.DataFrame(st.session_state.atm_ce_ohlc)
     df_pe_ohlc = pd.DataFrame(st.session_state.atm_pe_ohlc)
     
     with ce_chart_slot.container():
         if not df_ce_ohlc.empty:
             fig = go.Figure(data=[go.Candlestick(x=df_ce_ohlc['time'], open=df_ce_ohlc['open'], high=df_ce_ohlc['high'], low=df_ce_ohlc['low'], close=df_ce_ohlc['close'])])
-            fig.update_layout(xaxis_rangeslider_visible=False, height=260, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True, key="ce_cand_live")
+            fig.update_layout(title=f"ATM Call (CE) - Strike {atm_strike}", xaxis_rangeslider_visible=False, height=260, template="plotly_dark")
+            st.plotly_chart(fig, use_container_width=True, key="ce_cand_v3")
             
     with pe_chart_slot.container():
         if not df_pe_ohlc.empty:
             fig = go.Figure(data=[go.Candlestick(x=df_pe_ohlc['time'], open=df_pe_ohlc['open'], high=df_pe_ohlc['high'], low=df_pe_ohlc['low'], close=df_pe_ohlc['close'])])
-            fig.update_layout(xaxis_rangeslider_visible=False, height=260, margin=dict(l=10,r=10,t=10,b=10), template="plotly_dark")
-            st.plotly_chart(fig, use_container_width=True, key="pe_cand_live")
+            fig.update_layout(title=f"ATM Put (PE) - Strike {atm_strike}", xaxis_rangeslider_visible=False, height=260, template="plotly_dark")
+            st.plotly_chart(fig, use_container_width=True, key="pe_cand_v3")
 
-    # --- FORCED LINE GRAPH VIEW FOR PCR & STRADDLE ---
+    # Line charts for PCR & Straddle Tracker
     with line_charts_box.container():
         chart_df = st.session_state.intraday_log.set_index("Timestamp")
-        
-        # Line plots
-        fig_pcr = go.Figure()
-        fig_pcr.add_trace(go.Scatter(x=chart_df.index, y=chart_df['PCR'], mode='lines+markers', name='PCR Ratio', line=dict(color='#ff9900', width=2)))
-        fig_pcr.update_layout(title="PCR Trend Analysis", height=230, margin=dict(l=10,r=10,t=30,b=10), template="plotly_dark")
-        st.plotly_chart(fig_pcr, use_container_width=True, key="pcr_line_live")
-        
-        fig_std = go.Figure()
-        fig_std.add_trace(go.Scatter(x=chart_df.index, y=chart_df['ATM_Straddle'], mode='lines', name='Straddle Premium', line=dict(color='#00a8ff', width=2.5)))
-        fig_std.update_layout(title="ATM Straddle Value Decay Tracker", height=230, margin=dict(l=10,r=10,t=30,b=10), template="plotly_dark")
-        st.plotly_chart(fig_std, use_container_width=True, key="straddle_line_live")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.line_chart(chart_df["PCR"], height=200)
+        with c2:
+            st.line_chart(chart_df["ATM_Straddle"], height=200)
+
+    # --- ADDED: OPTION CHAIN DATA MATRIX GRIDS ---
+    with matrix_slot.container():
+        st.subheader("⛓️ Live Option Chain Grid Matrix")
+        ce_matrix = ce_df[['strike', 'ltp', 'oi', 'iv']].rename(columns={'ltp':'CE_LTP', 'oi':'CE_OI', 'iv':'CE_IV'})
+        pe_matrix = pe_df[['strike', 'ltp', 'oi', 'iv']].rename(columns={'ltp':'PE_LTP', 'oi':'PE_OI', 'iv':'PE_IV'})
+        merged_matrix = pd.merge(ce_matrix, pe_matrix, on='strike').sort_values('strike')
+        st.dataframe(merged_matrix, use_container_width=True, height=220)
 
 live_dashboard_fragment()

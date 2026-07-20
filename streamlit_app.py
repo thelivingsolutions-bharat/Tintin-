@@ -9,14 +9,14 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="QuantOption Pro Live", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 QuantOption Pro - Direct Dhan API Engine")
 
-# --- NATIVE KEY STORAGE BINDERS (Prevents typing/refresh wiping) ---
+# --- NATIVE PARAMETER STORAGE BINDERS ---
 if "stored_client" not in st.session_state: st.session_state.stored_client = "1104941786"
 if "stored_token" not in st.session_state: st.session_state.stored_token = ""
 
 # Permanent Data Tracking Matrix Dataframes
 if "intraday_log" not in st.session_state: st.session_state.intraday_log = pd.DataFrame(columns=["Timestamp", "Spot", "PCR", "ATM_Straddle"])
 if "premium_history" not in st.session_state: st.session_state.premium_history = pd.DataFrame(columns=["Timestamp", "CE_LTP", "PE_LTP"])
-if "sim_spot" not in st.session_state: st.session_state.sim_spot = 24154.43
+if "sim_spot" not in st.session_state: st.session_state.sim_spot = 24151.26
 
 # --- DIRECT DHAN GATEWAY API ACCESS ROUTINE ---
 def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_date):
@@ -74,7 +74,6 @@ def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_d
 # --- SIDEBAR INTERFACE PANEL ---
 st.sidebar.header("🔌 Credentials Configuration")
 
-# Binding widgets directly to key parameter strings avoids focus/typing losses during fragment runs
 st.sidebar.text_input("Dhan Client ID", key="stored_client")
 st.sidebar.text_input("Active Access Token (JWT)", type="password", key="stored_token")
 
@@ -109,12 +108,12 @@ def live_dashboard_fragment():
     current_time = datetime.now().strftime("%H:%M:%S")
     scrip_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27}
     
-    # Process core POST connection requests using the locked configuration tokens
+    # Process backend payload requests
     base_spot, df_current, api_status = fetch_raw_dhan_chain(
         st.session_state.stored_client, st.session_state.stored_token, scrip_map[target_symbol], "IDX_I", expiry_date
     )
     
-    # Generate realistic metric variance when resolving/syncing connections to completely clear flatlines
+    # Generate distinct math variances when live connections sync to guarantee clear visualization curves
     if api_status != "success":
         st.session_state.sim_spot += np.random.uniform(-4.5, 4.8)
         base_spot = st.session_state.sim_spot
@@ -130,12 +129,12 @@ def live_dashboard_fragment():
     pcr = pe_df['oi'].sum() / ce_df['oi'].sum() if ce_df['oi'].sum() > 0 else 0.0
     
     # Live directional trend matrix rules
-    if pcr >= 1.05: trend_str, trend_color = "🐂 STRONG BULLISH MOMENTUM (Go Long)", "green"
-    elif pcr <= 0.95: trend_str, trend_color = "🐻 STRONG BEARISH MOMENTUM (Go Short)", "red"
+    if pcr >= 1.25: trend_str, trend_color = "🐂 STRONG BULLISH MOMENTUM (Go Long)", "green"
+    elif pcr <= 0.85: trend_str, trend_color = "🐻 STRONG BEARISH MOMENTUM (Go Short)", "red"
     else: trend_str, trend_color = "🦀 CONSOLIDATION / NEUTRAL SCALPING ZONE", "orange"
     
     if api_status != "success":
-        trend_slot.warning(f"⚠️ Live Feed Offline ({api_status}). Showing visualization fallback tracker.")
+        trend_slot.warning(f"⚠️ Live Feed Offline ({api_status}). Displaying visualization fallback tracker.")
     else:
         trend_slot.markdown(f"### Live Trend Matrix: :{trend_color}[{trend_str}]")
 
@@ -166,13 +165,13 @@ def live_dashboard_fragment():
         fig_ce = go.Figure()
         fig_ce.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["CE_LTP"], mode="lines+markers", line=dict(color="#00cc96", width=2.5)))
         fig_ce.update_layout(title=f"ATM Call (CE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v13")
+        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v14")
 
     with pe_chart_slot.container():
         fig_pe = go.Figure()
         fig_pe.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["PE_LTP"], mode="lines+markers", line=dict(color="#ef553b", width=2.5)))
         fig_pe.update_layout(title=f"ATM Put (PE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v13")
+        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v14")
 
     # Metrics Trends
     chart_df = st.session_state.intraday_log.set_index("Timestamp")

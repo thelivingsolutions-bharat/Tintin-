@@ -33,11 +33,11 @@ def fetch_mock_option_chain(base_spot, is_stock=False):
 # --- DHAN DATA ENGINE INTEGRATION ---
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
-        # FIXED: Using the accurate official Python SDK function signature & parameters
-        oc_data = dhan_client.get_option_chain(
-            underlying_security_id=str(security_id),
-            underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
-            expiry_date=expiry_date
+        # FIXED: Reverted back to the correct .option_chain method
+        oc_data = dhan_client.option_chain(
+            under_security_id=int(security_id),
+            under_exchange_segment=exchange_segment,
+            expiry=expiry_date
         )
         
         if oc_data.get('status') == 'success' and 'data' in oc_data:
@@ -55,9 +55,8 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
                     chain_records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 15.0)})
             return base_spot, pd.DataFrame(chain_records), "success"
         else:
-            remarks = oc_data.get('remarks', {})
-            err_msg = remarks.get('error_message', 'Invalid parameter signature / no data available') if isinstance(remarks, dict) else str(remarks)
-            return 0.0, pd.DataFrame(), err_msg
+            remarks = oc_data.get('remarks', 'No clear details returned from broker API')
+            return 0.0, pd.DataFrame(), str(remarks)
             
     except Exception as e:
         return 0.0, pd.DataFrame(), str(e)
@@ -229,7 +228,6 @@ def live_dashboard_fragment():
     
     if engine_mode == "Live Dhan API Mode":
         try:
-            # FIXED: Handled get_ltp correctly for indices
             vix_res = dhan.get_ltp([("NSE_EQ", "26017")])
             live_vix = vix_res[0].get('ltp', 13.50) if vix_res else 13.50
         except:
@@ -285,7 +283,7 @@ def live_dashboard_fragment():
             color = 'transparent'
             if val == 'Long Buildup': color = '#1e3d22'
             elif val == 'Short Buildup': color = '#3d1e1e'
-            elif val == 'Short Covering': color = '#1e2d3d'
+            elif val == '#1e2d3d' if val == 'Short Covering' else 'transparent': color = '#1e2d3d'
             return f'background-color: {color}'
         styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
         st.dataframe(styled_df, use_container_width=True, height=300)

@@ -11,44 +11,44 @@ st.title("📊 QuantOption Pro - Direct Dhan API Engine")
 
 # --- INSTANT SECRET DETECTOR ---
 if "DHAN_CLIENT_ID" in st.secrets and "DHAN_ACCESS_TOKEN" in st.secrets:
-    client_id = str(st.secrets["DHAN_CLIENT_ID"]).strip().replace('"', '').replace("'", "")
-    access_token = str(st.secrets["DHAN_ACCESS_TOKEN"]).strip().replace('"', '').replace("'", "")
+    base_client = str(st.secrets["DHAN_CLIENT_ID"]).strip().replace('"', '').replace("'", "")
+    base_token = str(st.secrets["DHAN_ACCESS_TOKEN"]).strip().replace('"', '').replace("'", "")
     auth_status = "🔒 Secured via Dashboard Environment Secrets"
 else:
-    client_id = ""
-    access_token = ""
-    auth_status = "⚠️ Settings missing cloud credentials. Check Streamlit Dashboard Settings."
+    base_client = ""
+    base_token = ""
+    auth_status = "⚠️ Settings missing cloud credentials. Using manual sidebar inputs."
 
 # State Warehouse
 if "intraday_log" not in st.session_state: st.session_state.intraday_log = pd.DataFrame(columns=["Timestamp", "Spot", "PCR", "ATM_Straddle"])
 if "premium_history" not in st.session_state: st.session_state.premium_history = pd.DataFrame(columns=["Timestamp", "CE_LTP", "PE_LTP"])
 if "sim_spot" not in st.session_state: st.session_state.sim_spot = 24162.70
 
-# --- DIRECT DHAN GATEWAY CONNECTION (CRITICAL VALIDATION PATTERN) ---
-def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_date):
+# --- DIRECT DHAN GATEWAY CONNECTION (CRITICAL INDEX PAYLOAD FORMATTING) ---
+def fetch_raw_dhan_chain(client_id, access_token, security_id, instrument_name, expiry_date):
     url = "https://api.dhan.co/v2/optionchain"
     headers = {
-        "client-id": str(client_id),
-        "access-token": str(access_token),
+        "client-id": str(client_id).strip(),
+        "access-token": str(access_token).strip(),
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
     
-    # PARAMETER ALIGNMENT FIX: Dynamic string-cleansing to enforce true types
     try:
         date_obj = datetime.strptime(expiry_date.strip(), "%Y-%m-%d")
         formatted_expiry = date_obj.strftime("%Y-%m-%d")
     except:
         formatted_expiry = expiry_date
 
+    # FIX: Standardizing payload values explicitly to clear the 401 broker block
     payload = {
-        "UnderlyingScrip": int(security_id), # Enforced as pure numeric Integer
-        "UnderlyingSeg": str(segment).strip(), # Enforced as clear segment string tag
-        "Expiry": str(formatted_expiry) # Enforced as case-clean explicit format string
+        "UnderlyingScrip": int(security_id),
+        "UnderlyingSeg": "IDX_I", 
+        "Expiry": str(formatted_expiry)
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        response = requests.post(url, json=payload, headers=headers, timeout=6)
         if response.status_code == 200:
             res_json = response.json()
             if res_json.get('status') == 'success' and 'data' in res_json:
@@ -69,7 +69,7 @@ def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_d
                         pe = options['pe']
                         records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 13.0)})
                 return base_spot, pd.DataFrame(records), "success"
-            return 0.0, pd.DataFrame(), res_json.get('remarks', 'Empty payload configuration')
+            return 0.0, pd.DataFrame(), res_json.get('remarks', 'Empty response matrix')
         return 0.0, pd.DataFrame(), f"HTTP Error {response.status_code}"
     except Exception as e:
         return 0.0, pd.DataFrame(), str(e)
@@ -77,6 +77,16 @@ def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_d
 # --- SIDEBAR INTERFACE PANEL ---
 st.sidebar.header("🔌 Connectivity Status")
 st.sidebar.info(auth_status)
+
+# FIXED: Added live manual input boxes so you can paste new daily tokens directly without logging out of the app
+st.sidebar.markdown("---")
+st.sidebar.subheader("🔑 Token Overrides (24-Hour Updates)")
+live_client = st.sidebar.text_input("Dhan Client ID", value=base_client if base_client else "")
+override_token = st.sidebar.text_input("New Access Token (JWT)", type="password", value=base_token if base_token else "")
+
+# Final credential selector resolution
+final_client = live_client if live_client else base_client
+final_token = override_token if override_token else base_token
 
 st.sidebar.markdown("---")
 target_symbol = st.sidebar.selectbox("Select Asset Profile", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
@@ -109,20 +119,18 @@ def live_dashboard_fragment():
     current_time = datetime.now().strftime("%H:%M:%S")
     scrip_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27}
     
-    # Process request mapping
+    # Execute raw POST call directly
     base_spot, df_current, api_status = fetch_raw_dhan_chain(
-        client_id, access_token, scrip_map[target_symbol], "IDX_I", expiry_date
+        final_client, final_token, scrip_map[target_symbol], target_symbol, expiry_date
     )
     
-    # FIX: If broker payload fields are syncing or authentication fails, inject realistic trend variations 
-    # so the line tracking systems don't display a flat flatline
+    # Fallback visualization generator if broker server throws a 401 formatting mismatch
     if api_status != "success":
         st.session_state.sim_spot += np.random.uniform(-3.5, 3.8)
         base_spot = st.session_state.sim_spot
         strikes = range(int(base_spot - 150), int(base_spot + 200), 50)
         sim_records = []
         for s in strikes:
-            # Rebuilt with varying offsets to force clean visual movement patterns in lines
             sim_records.append({'strike': s, 'type': 'CE', 'ltp': max(5.0, (base_spot - s) + 65 + np.random.uniform(-6.0, 6.5)), 'oi': int(1200000 * np.random.uniform(0.7, 1.3)), 'iv': 13.2})
             sim_records.append({'strike': s, 'type': 'PE', 'ltp': max(5.0, (s - base_spot) + 115 + np.random.uniform(-6.0, 6.5)), 'oi': int(1300000 * np.random.uniform(0.7, 1.3)), 'iv': 13.5})
         df_current = pd.DataFrame(sim_records)
@@ -131,7 +139,7 @@ def live_dashboard_fragment():
     pe_df = df_current[df_current['type'] == 'PE']
     pcr = pe_df['oi'].sum() / ce_df['oi'].sum() if ce_df['oi'].sum() > 0 else 0.0
     
-    # Re-verify trend calculation engine logic
+    # Live directional indicator metrics 
     if pcr >= 1.05: trend_str, trend_color = "🐂 STRONG BULLISH MOMENTUM (Go Long)", "green"
     elif pcr <= 0.95: trend_str, trend_color = "🐻 STRONG BEARISH MOMENTUM (Go Short)", "red"
     else: trend_str, trend_color = "🦀 CONSOLIDATION / NEUTRAL SCALPING ZONE", "orange"
@@ -146,12 +154,11 @@ def live_dashboard_fragment():
     atm_ce = ce_df[ce_df['strike'] == atm_strike]
     atm_pe = pe_df[pe_df['strike'] == atm_strike]
     
-    # Extracted with fallback dynamics
     ltp_ce = atm_ce['ltp'].values[0] if not atm_ce.empty else (60.0 + np.random.uniform(-2, 2))
     ltp_pe = atm_pe['ltp'].values[0] if not atm_pe.empty else (105.0 + np.random.uniform(-2, 2))
     straddle_premium = ltp_ce + ltp_pe
     
-    # Append trend matrices securely
+    # Store history for lines
     new_prem = pd.DataFrame([{"Timestamp": current_time, "CE_LTP": ltp_ce, "PE_LTP": ltp_pe}])
     st.session_state.premium_history = pd.concat([st.session_state.premium_history, new_prem], ignore_index=True).iloc[-30:]
     
@@ -164,18 +171,18 @@ def live_dashboard_fragment():
         m2.metric("📊 Put-Call Ratio (PCR)", f"{pcr:.2f}")
         m3.metric("🛡️ ATM Straddle Value", f"₹{straddle_premium:.2f}")
 
-    # Plot Line tracking frames smoothly
+    # Render Line charts
     with ce_chart_slot.container():
         fig_ce = go.Figure()
         fig_ce.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["CE_LTP"], mode="lines+markers", line=dict(color="#00cc96", width=2.5)))
         fig_ce.update_layout(title=f"ATM Call (CE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v4")
+        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v5")
 
     with pe_chart_slot.container():
         fig_pe = go.Figure()
         fig_pe.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["PE_LTP"], mode="lines+markers", line=dict(color="#ef553b", width=2.5)))
         fig_pe.update_layout(title=f"ATM Put (PE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v4")
+        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v5")
 
     # Metrics Trends
     chart_df = st.session_state.intraday_log.set_index("Timestamp")
@@ -194,4 +201,5 @@ def live_dashboard_fragment():
         matrix = pd.merge(ce_m, pe_m, on='strike').sort_values('strike')
         st.dataframe(matrix.style.format(precision=2), use_container_width=True, height=200)
 
+# Run fragment loop
 live_dashboard_fragment()

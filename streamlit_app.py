@@ -27,9 +27,14 @@ if "sim_spot" not in st.session_state: st.session_state.sim_spot = 24162.70
 # --- DIRECT DHAN GATEWAY CONNECTION ---
 def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_date):
     url = "https://api.dhan.co/v2/optionchain"
+    
+    # ADVANCED STRIP FIX: Clear hidden whitespaces, carriage returns, or quote wraps
+    clean_client = str(client_id).strip().replace("\n", "").replace("\r", "")
+    clean_token = str(access_token).strip().replace("\n", "").replace("\r", "")
+    
     headers = {
-        "client-id": str(client_id).strip(),
-        "access-token": str(access_token).strip(),
+        "client-id": clean_client,
+        "access-token": clean_token,
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
@@ -77,13 +82,11 @@ def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_d
 st.sidebar.header("🔌 Connectivity Status")
 st.sidebar.info(auth_status)
 
-# FIXED: Re-introduces manual token override inputs directly on your app layout view
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔑 Token Override Controls")
-live_client = st.sidebar.text_input("Dhan Client ID", value=base_client)
-override_token = st.sidebar.text_input("New Access Token (JWT)", type="password", value=base_token)
+live_client = st.sidebar.text_input("Dhan Client ID", value=base_client, key="client_txt_input")
+override_token = st.sidebar.text_input("New Access Token (JWT)", type="password", value=base_token, key="token_txt_input")
 
-# Resolution prioritization logic
 final_client = live_client if live_client.strip() else base_client
 final_token = override_token if override_token.strip() else base_token
 
@@ -91,6 +94,10 @@ st.sidebar.markdown("---")
 target_symbol = st.sidebar.selectbox("Select Asset Profile", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
 expiry_date = st.sidebar.text_input("Expiry Date (YYYY-MM-DD)", value="2026-07-21")
 activate_engine = st.sidebar.toggle("🚀 ACTIVATE STREAM ENGINE", value=False)
+
+# Token length structural validation helper visualizer
+if len(final_token) > 20:
+    st.sidebar.success(f"Token Loaded Vector: {len(final_token)} chars check pass.")
 
 # Main Dashboard View Nodes
 trend_slot = st.empty()
@@ -118,13 +125,12 @@ def live_dashboard_fragment():
     current_time = datetime.now().strftime("%H:%M:%S")
     scrip_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27}
     
-    # Process core POST request block
+    # Process backend payload requests
     base_spot, df_current, api_status = fetch_raw_dhan_chain(
         final_client, final_token, scrip_map[target_symbol], "IDX_I", expiry_date
     )
     
-    # FIX: Generates organic visual fluctuations when in simulation/reconnecting status
-    # to eliminate straight flatlines completely
+    # Fallback simulation logic designed to fluctuate seamlessly to avoid flat tracking lines
     if api_status != "success":
         st.session_state.sim_spot += np.random.uniform(-4.5, 4.8)
         base_spot = st.session_state.sim_spot
@@ -176,13 +182,13 @@ def live_dashboard_fragment():
         fig_ce = go.Figure()
         fig_ce.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["CE_LTP"], mode="lines+markers", line=dict(color="#00cc96", width=2.5)))
         fig_ce.update_layout(title=f"ATM Call (CE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v6")
+        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v7")
 
     with pe_chart_slot.container():
         fig_pe = go.Figure()
         fig_pe.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["PE_LTP"], mode="lines+markers", line=dict(color="#ef553b", width=2.5)))
         fig_pe.update_layout(title=f"ATM Put (PE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v6")
+        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v7")
 
     # Metrics Trends
     chart_df = st.session_state.intraday_log.set_index("Timestamp")

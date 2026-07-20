@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="QuantOption Pro Live", layout="wide", initial_sidebar_state="expanded")
 st.title("📊 QuantOption Pro - Direct Dhan API Engine")
 
-# Initialize text memory buffers to prevent form resets across tabs
+# --- NATIVE KEY STORAGE BINDERS (Prevents typing/refresh wiping) ---
 if "stored_client" not in st.session_state: st.session_state.stored_client = "1104941786"
 if "stored_token" not in st.session_state: st.session_state.stored_token = ""
 
@@ -18,21 +18,18 @@ if "intraday_log" not in st.session_state: st.session_state.intraday_log = pd.Da
 if "premium_history" not in st.session_state: st.session_state.premium_history = pd.DataFrame(columns=["Timestamp", "CE_LTP", "PE_LTP"])
 if "sim_spot" not in st.session_state: st.session_state.sim_spot = 24154.43
 
-# --- DIRECT DHAN GATEWAY CONNECTION (ANTI-BOT INSULATED HEADERS) ---
+# --- DIRECT DHAN GATEWAY API ACCESS ROUTINE ---
 def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_date):
     url = "https://api.dhan.co/v2/optionchain"
     
-    # Strip carriage returns and hidden trailing linebreaks completely
-    clean_client = str(client_id).strip().replace("\n", "").replace("\r", "")
-    clean_token = str(access_token).strip().replace("\n", "").replace("\r", "")
+    clean_client = str(client_id).strip()
+    clean_token = str(access_token).strip()
     
-    # SYSTEM BOUND HEADERS FIX: Added standard browser headers to bypass bot detection filters
     headers = {
         "client-id": clean_client,
         "access-token": clean_token,
         "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "Content-Type": "application/json"
     }
     
     try:
@@ -48,7 +45,7 @@ def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_d
     }
     
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=6)
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
         if response.status_code == 200:
             res_json = response.json()
             if res_json.get('status') == 'success' and 'data' in res_json:
@@ -69,21 +66,17 @@ def fetch_raw_dhan_chain(client_id, access_token, security_id, segment, expiry_d
                         pe = options['pe']
                         records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 13.0)})
                 return base_spot, pd.DataFrame(records), "success"
-            return 0.0, pd.DataFrame(), res_json.get('remarks', 'API Refusal')
-        return 0.0, pd.DataFrame(), f"HTTP {response.status_code} Refusal"
+            return 0.0, pd.DataFrame(), res_json.get('remarks', 'Authentication or Data Refusal')
+        return 0.0, pd.DataFrame(), f"HTTP {response.status_code} Error"
     except Exception as e:
         return 0.0, pd.DataFrame(), str(e)
 
 # --- SIDEBAR INTERFACE PANEL ---
-st.sidebar.header("🔌 Token Storage Engine")
+st.sidebar.header("🔌 Credentials Configuration")
 
-# Direct session text fields prevent string wipe cycles on refresh
-live_client = st.sidebar.text_input("Dhan Client ID", value=st.session_state.stored_client)
-override_token = st.sidebar.text_input("Active Access Token (JWT)", type="password", value=st.session_state.stored_token)
-
-# Safe background updates
-st.session_state.stored_client = live_client
-st.session_state.stored_token = override_token
+# Binding widgets directly to key parameter strings avoids focus/typing losses during fragment runs
+st.sidebar.text_input("Dhan Client ID", key="stored_client")
+st.sidebar.text_input("Active Access Token (JWT)", type="password", key="stored_token")
 
 st.sidebar.markdown("---")
 target_symbol = st.sidebar.selectbox("Select Asset Profile", ["NIFTY", "BANKNIFTY", "FINNIFTY"])
@@ -110,18 +103,18 @@ matrix_slot = st.empty()
 @st.fragment(run_every=4)
 def live_dashboard_fragment():
     if not activate_engine:
-        metrics_box.info("Engine Standing By. Activate connection using the toggle panel.")
+        metrics_box.info("Engine Standing By. Populate credentials in the sidebar and activate the toggle switch.")
         return
 
     current_time = datetime.now().strftime("%H:%M:%S")
     scrip_map = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27}
     
-    # Process core POST connection requests using the persistent configuration tokens
+    # Process core POST connection requests using the locked configuration tokens
     base_spot, df_current, api_status = fetch_raw_dhan_chain(
         st.session_state.stored_client, st.session_state.stored_token, scrip_map[target_symbol], "IDX_I", expiry_date
     )
     
-    # organic visual data generator loop if the broker data stream is initializing or re-caching
+    # Generate realistic metric variance when resolving/syncing connections to completely clear flatlines
     if api_status != "success":
         st.session_state.sim_spot += np.random.uniform(-4.5, 4.8)
         base_spot = st.session_state.sim_spot
@@ -136,13 +129,13 @@ def live_dashboard_fragment():
     pe_df = df_current[df_current['type'] == 'PE']
     pcr = pe_df['oi'].sum() / ce_df['oi'].sum() if ce_df['oi'].sum() > 0 else 0.0
     
-    # Live directional indicator algorithms
+    # Live directional trend matrix rules
     if pcr >= 1.05: trend_str, trend_color = "🐂 STRONG BULLISH MOMENTUM (Go Long)", "green"
     elif pcr <= 0.95: trend_str, trend_color = "🐻 STRONG BEARISH MOMENTUM (Go Short)", "red"
     else: trend_str, trend_color = "🦀 CONSOLIDATION / NEUTRAL SCALPING ZONE", "orange"
     
     if api_status != "success":
-        trend_slot.warning(f"⚠️ Live Feed Syncing ({api_status}). Displaying dynamic tracking visualization.")
+        trend_slot.warning(f"⚠️ Live Feed Offline ({api_status}). Showing visualization fallback tracker.")
     else:
         trend_slot.markdown(f"### Live Trend Matrix: :{trend_color}[{trend_str}]")
 
@@ -173,13 +166,13 @@ def live_dashboard_fragment():
         fig_ce = go.Figure()
         fig_ce.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["CE_LTP"], mode="lines+markers", line=dict(color="#00cc96", width=2.5)))
         fig_ce.update_layout(title=f"ATM Call (CE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v12")
+        st.plotly_chart(fig_ce, use_container_width=True, key="ce_line_final_v13")
 
     with pe_chart_slot.container():
         fig_pe = go.Figure()
         fig_pe.add_trace(go.Scatter(x=st.session_state.premium_history["Timestamp"], y=st.session_state.premium_history["PE_LTP"], mode="lines+markers", line=dict(color="#ef553b", width=2.5)))
         fig_pe.update_layout(title=f"ATM Put (PE) Price - Strike {atm_strike}", height=220, template="plotly_dark", margin=dict(l=10,r=10,t=35,b=10))
-        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v12")
+        st.plotly_chart(fig_pe, use_container_width=True, key="pe_line_final_v13")
 
     # Metrics Trends
     chart_df = st.session_state.intraday_log.set_index("Timestamp")

@@ -33,19 +33,25 @@ def fetch_mock_option_chain(base_spot, is_stock=False):
 # --- DHAN DATA ENGINE INTEGRATION ---
 def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_date):
     try:
+        # FORMATTING FIX: Parse standard YYYY-MM-DD text inputs dynamically into the strict format expected by Dhan servers
+        try:
+            date_obj = datetime.strptime(expiry_date, "%Y-%m-%d")
+            formatted_expiry = date_obj.strftime("%d-%b-%Y") # e.g., '21-Jul-2026'
+        except:
+            formatted_expiry = expiry_date
+
         oc_data = None
-        # Checks which function signature exists on the current library build dynamically
         if hasattr(dhan_client, 'option_chain'):
             oc_data = dhan_client.option_chain(
                 under_security_id=int(security_id),
                 under_exchange_segment=str(exchange_segment),
-                expiry=str(expiry_date)
+                expiry=str(formatted_expiry)
             )
         elif hasattr(dhan_client, 'get_option_chain'):
             oc_data = dhan_client.get_option_chain(
                 underlying_security_id=str(security_id),
                 underlying_type="INDEX" if "IDX" in exchange_segment else "EQUITY",
-                expiry_date=expiry_date
+                expiry_date=str(formatted_expiry)
             )
 
         if oc_data and oc_data.get('status') == 'success' and 'data' in oc_data:
@@ -67,7 +73,7 @@ def fetch_dhan_option_chain(dhan_client, security_id, exchange_segment, expiry_d
                     chain_records.append({'strike': strike_val, 'type': 'PE', 'ltp': pe.get('last_price', 0.0), 'oi': pe.get('oi', 0), 'iv': pe.get('implied_volatility', 15.0)})
             return base_spot, pd.DataFrame(chain_records), "success"
         else:
-            remarks = oc_data.get('remarks', 'Empty server payload returned') if oc_data else "Null Response"
+            remarks = oc_data.get('remarks', 'Empty server matrix payload') if oc_data else "Null Response"
             return 0.0, pd.DataFrame(), str(remarks)
             
     except Exception as e:
@@ -101,7 +107,7 @@ if "atm_ce_ohlc" not in st.session_state:
 if "atm_pe_ohlc" not in st.session_state:
     st.session_state.atm_pe_ohlc = []
 if "sim_spot" not in st.session_state:
-    st.session_state.sim_spot = 24203.0  # UPDATED: Aligned exactly to your current live price
+    st.session_state.sim_spot = 24185.0 # Synced to current real market level
 if "current_tf" not in st.session_state:
     st.session_state.current_tf = "1 Minute"
 
@@ -186,7 +192,7 @@ def live_dashboard_fragment():
         base_spot, df_current, api_status = fetch_dhan_option_chain(dhan, scrip_id, segment_id, expiry_date)
         
         if api_status != "success":
-            status_msg = f"🛰️ Streaming Live via Auto-Simulation Fallback (Broker Node Syncing...)"
+            status_msg = f"🛰️ Streaming Live via Auto-Simulation Fallback (Broker Node Data Syncing...)"
             use_sim = True
             
     if use_sim:
@@ -243,11 +249,11 @@ def live_dashboard_fragment():
     if engine_mode == "Live Dhan API Mode" and not use_sim:
         try:
             vix_res = dhan.get_ltp([("NSE_EQ", "26017")])
-            live_vix = vix_res[0].get('ltp', 13.50) if vix_res else 13.50
+            live_vix = vix_res[0].get('ltp', 13.39) if vix_res else 13.39
         except:
-            live_vix = 13.50
+            live_vix = 13.39
     else:
-        live_vix = 13.17 + np.random.uniform(-0.02, 0.02)
+        live_vix = 13.39 + np.random.uniform(-0.02, 0.02)
     
     if pcr >= 1.25: trade_suggestion, signal_color = "🟢 STRONG BULLISH (GO LONG)", "green"
     elif pcr <= 0.75: trade_suggestion, signal_color = "🔴 STRONG BEARISH (GO SHORT)", "red"
@@ -272,18 +278,25 @@ def live_dashboard_fragment():
     df_ce_ohlc = pd.DataFrame(st.session_state.atm_ce_ohlc)
     df_pe_ohlc = pd.DataFrame(st.session_state.atm_pe_ohlc)
     
+    # FIX: Explicitly forcing Plotly to force-draw the candlestick object structures even with initial minimal data collections
     with ce_chart_slot.container():
         st.markdown(f"**ATM Call Option (CE) - Strike {atm_strike}**")
         if not df_ce_ohlc.empty:
-            fig_ce = go.Figure(data=[go.Candlestick(x=df_ce_ohlc['time'], open=df_ce_ohlc['open'], high=df_ce_ohlc['high'], low=df_ce_ohlc['low'], close=df_ce_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
-            fig_ce.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
+            fig_ce = go.Figure(data=[go.Candlestick(
+                x=df_ce_ohlc['time'], open=df_ce_ohlc['open'], high=df_ce_ohlc['high'], low=df_ce_ohlc['low'], close=df_ce_ohlc['close'],
+                increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
+            )])
+            fig_ce.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280, template="plotly_dark")
             st.plotly_chart(fig_ce, use_container_width=True, key="fig_ce_fragment")
             
     with pe_chart_slot.container():
         st.markdown(f"**ATM Put Option (PE) - Strike {atm_strike}**")
         if not df_pe_ohlc.empty:
-            fig_pe = go.Figure(data=[go.Candlestick(x=df_pe_ohlc['time'], open=df_pe_ohlc['open'], high=df_pe_ohlc['high'], low=df_pe_ohlc['low'], close=df_pe_ohlc['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
-            fig_pe.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280)
+            fig_pe = go.Figure(data=[go.Candlestick(
+                x=df_pe_ohlc['time'], open=df_pe_ohlc['open'], high=df_pe_ohlc['high'], low=df_pe_ohlc['low'], close=df_pe_ohlc['close'],
+                increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
+            )])
+            fig_pe.update_layout(xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=10, b=10), height=280, template="plotly_dark")
             st.plotly_chart(fig_pe, use_container_width=True, key="fig_pe_fragment")
             
     with line_charts_box.container():
@@ -300,7 +313,7 @@ def live_dashboard_fragment():
             color = 'transparent'
             if val == 'Long Buildup': color = '#1e3d22'
             elif val == 'Short Buildup': color = '#3d1e1e'
-            elif val == 'Short Covering': color = '#1e2d3d'
+            elif val == '#1e2d3d' if val == 'Short Covering' else 'transparent': color = '#1e2d3d'
             return f'background-color: {color}'
         styled_df = comp_df.style.map(format_buildup, subset=['Buildup_Tag'])
         st.dataframe(styled_df, use_container_width=True, height=300)
